@@ -1,70 +1,66 @@
-# co —— 一个有栈协程的最小实现
+# co
 
-x86-64 / Linux / SysV ABI。分两层:
+x86-64 有栈协程, Linux only。机制层四个接口一份汇编, 调度策略作为可选外壳。
 
-- **机制层** `co.c` + `swap.S`: 四个接口, 只回答"谁握下一条指令"。
-- **策略层** `sched.c`(可选): 一条就绪队列 + 轮转, 只调 `co_resume`, 不碰汇编。
+- `co.c` / `swap.S` — `co_create` / `co_resume` / `co_yield` / `co_destroy`, 切换点只有 `co_swap`。
+- `sched.c` — 就绪队列 + round-robin, 只调 `co_resume`, 不碰汇编。
 
-## 文件
+## 结构
 
 | 文件 | 内容 |
-|---|---|
-| `swap.S` | 15 条指令: 存 6 个 callee-saved 寄存器 + 换 rsp + ret |
-| `co.h` `co.c` | 栈 / guard page / resume / yield / destroy |
-| `main.c` | 生成器: 一个无限序列 + 两条协程交替取 |
-| `sched.h` `sched.c` | 外壳: spawn / run / join |
-| `pool.c` | 3 个 worker 抢 9 个活, main 只 join 1 号 |
+| --- | --- |
+| `swap.S` | `co_swap`: 存 6 个 callee-saved + rsp, 载入目标, `ret` |
+| `co.h` `co.c` | 机制层: 上下文、栈分配 (mmap + guard page)、生命周期 |
+| `sched.h` `sched.c` | 外壳: `sched_spawn` / `sched_run` / `sched_join` |
+| `test/test1_gen.c` | 生成器 |
+| `test/test2_pool.c` | 3 worker 抢 9 个任务, main 只 join 1 号 |
 
-## 接口
-
-```c
-/* 机制层: 方向写在函数名里, 所以可以指定目标 */
-co_t *co_create(void (*fn)(void *), void *arg);  /* 铺栈, 摆好"第一次运行" */
-int   co_resume(co_t *c, int in);                /* 主栈 -> 协程, 返回它交出的 out */
-int   co_yield (int out);                        /* 协程 -> 主栈, 返回下次的 in */
-void  co_destroy(co_t *c);                       /* 拆栈 */
-
-/* 策略层: 谁该跑、等谁 */
-co_t *sched_spawn(void (*fn)(void *), void *arg);
-void  sched_run(void);                           /* 轮转到队列空 */
-void  sched_join(co_t *c);                       /* 只等这一个, 期间别人照跑 */
-```
-
-## 运行
+## 构建
 
 ```sh
-make run     # ./gen && ./pool
+make
+./test/test1_gen
+./test/test2_pool
 ```
 
-## 为什么 join 只能在外壳里
+`make run` 依次运行两个 demo。
 
-`join` 的前提是**能把 CPU 交给别人**: 我歇着, 谁接着跑, 谁回头叫醒我。
-机制层没有这张网 —— 那里 CPU 只会回到调用者, 所以"等"根本无从表达。
-外壳是唯一知道"还有谁可跑"的角色, 于是 `run`/`join` 只能住在它里面。
-这是分层的原因, 不是省事。
+## API
 
-## 三个必须记住的点
+```c
+co_t *co_create(void (*fn)(void *), void *arg);
+int   co_resume(co_t *c, int in);     /* 主栈 -> 协程, 返回 out */
+int   co_yield(int out);              /* 协程 -> 主栈, 返回下次的 in */
+void  co_destroy(co_t *c);            /* 仅限停在 yield 上的协程 */
 
-- **rip 不用存**。`co_swap` 最后一条是 `ret`, 它从栈顶弹目标地址。新栈栈顶被人工铺成 `[填充][co_main 地址]`, 那个 8 字节填充同时满足 `rsp % 16 == 8` 并充当假返回地址 —— 于是"第一次运行"和"第 n 次恢复"走**同一条路**, 代码里没有任何分支去区分它们。
-- **只有两个变量**: `main_ctx`(主栈的现场) 和 `cur`(现在谁在跑)。`co_resume` 存主栈、换协程; `co_yield` 存协程、换主栈。两句镜像, 没有别的控制流。
-- **不自己回收**。结束时只置 `DONE`, 由调用者 `co_destroy`; 自己释放自己的栈, 会在切走那一瞬间踩已释放内存。
+co_t *sched_spawn(void (*fn)(void *), void *arg);
+void  sched_run(void);                /* 队列跑空后回收 */
+void  sched_join(co_t *c);
+```
 
-## 生成器就是这两句话
+## 实现要点
 
-一个协程是一个**可以暂停的循环**, 循环变量就在它自己的栈上; 消费者 = 反复 `co_resume`, 收手时 `co_destroy`, 于是"无限序列"只被算到用得到的地方。
+`struct ctx` 只有 6 个 callee-saved 寄存器加 `rsp`, 因为其余状态已经在栈上: 编译器在 `call co_swap` 之前把活跃的 caller-saved 值写进了栈帧, `call` 压入了返回地址。存 `rsp` 等于存下整条栈。
 
-## 和 libco 的取舍
+`co_swap` 不保存 `rip`, 它以 `ret` 结尾, 目标地址取自栈顶。新栈栈顶被铺成 `[0][co_main]`, 首次运行和恢复因此走同一条路径, 代码里没有分支区分两者。那个 `0` 是 `co_main` 的假返回地址, 并保证入口处 `rsp % 16 == 8`。
 
-| | libco | 这里 |
-|---|---|---|
-| 谁挑下一个 | 库内随机 `rand()` | 调用者点名 (机制层) / 确定性 FIFO (外壳) |
-| 多少个协程 | 定长表 128, 处处检查 | 链表, 无上限, 无需检查 |
-| 切换 | `setjmp/longjmp` + `stack_switch_call`, 散在三处 | 只有 `co_swap` 一个出口 |
-| 栈 | 内嵌 64KB, 手动对齐 | `mmap` + `PROT_NONE` 保护页 |
-| 让出 | 一个 `co_yield` 同时"让出 + 挑人 + 恢复" | `resume`/`yield` 拆开, 方向显式 |
-| 等待 | `co_wait`, 单 `waiter` 字段 | 外壳 `join`, 等不到的人继续跑 |
+协程结束时只置 `CO_DONE`, 不释放自己的栈 —— 切走之后 `rsp` 仍指向它。由调用者 `co_destroy`。
 
-## 一个已知的简化
+## join 为什么在机制层之外
 
-只有一个消费者(主栈), 所以 `co_yield` 总是回到主栈 —— 这是"非对称 + 单消费者"的退化形态。
-要支持"协程里再 resume 另一个协程"(管道、嵌套), 需要给每个协程记一笔"谁叫的我", `co_yield` 才能回到上一层而不是主栈。
+`sched_join` 需要把 CPU 交给别人再拿回来, 而机制层里控制流只会回到调用者, 无法表达"等"。就绪队列由外壳持有, 所以等待只能发生在外壳。
+
+## 与 libco 的差异
+
+- 目标由调用者指定; 外壳是 FIFO, 不用随机。
+- 协程数量无上限。libco 用 `MAX_CO=128` 定长表, 调用点都要判 `co_start` 返回值。
+- 切换只经 `co_swap`。libco 有 `setjmp` / `longjmp` 与 `stack_switch_call` 两套, 并在 `co_yield` 里靠 `setjmp` 的返回值区分首次与恢复。
+- 栈是 `mmap` 加 `PROT_NONE` 保护页。libco 内嵌 64KB 数组, 溢出静默写坏堆。
+- 没有 `WAITING` 状态。libco 的死协程必须被 `co_wait` 才释放, 这里可以随时 `co_destroy`。
+
+## 限制
+
+- 仅 x86-64 SysV。Win64 下 `rdi` / `rsi` / `xmm6-15` 也是 callee-saved, 需加进 `struct ctx`。
+- 只能在 `co_yield` 这类 call 边界切换。
+- `errno` 是线程局部的, 协程之间共享。
+- 单消费者, `co_yield` 恒回主栈。嵌套 (协程里再 resume 另一个) 需在 `struct co` 中记录 caller。

@@ -1,23 +1,23 @@
 CC      ?= cc
 CFLAGS  ?= -O2 -g -Wall -Wextra
+INC      = -I.
 
-CORE = co.c swap.S
-GEN  = main.c   $(CORE)
-POOL = pool.c sched.c $(CORE)
+CORE  = co.c swap.S
+DEMOS = test/test1_gen test/test2_pool
 
-all: gen pool
+all: $(DEMOS)
 
-gen:  $(GEN) co.h
-	$(CC) $(CFLAGS) -o $@ $(GEN)
+test/test1_gen: test/test1_gen.c $(CORE) co.h
+	$(CC) $(CFLAGS) $(INC) -o $@ $< $(CORE)
 
-pool: $(POOL) co.h sched.h
-	$(CC) $(CFLAGS) -o $@ $(POOL)
+test/test2_pool: test/test2_pool.c sched.c $(CORE) co.h sched.h
+	$(CC) $(CFLAGS) $(INC) -o $@ $< sched.c $(CORE)
 
 run: all
-	./gen
-	./pool
+	./test/test1_gen
+	./test/test2_pool
 
 clean:
-	rm -f gen pool
+	rm -f $(DEMOS)
 
 .PHONY: all run clean
