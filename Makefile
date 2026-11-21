@@ -1,23 +1,23 @@
 CC      ?= cc
 CFLAGS  ?= -O2 -g -Wall -Wextra
-LIB      = co.c swap.S
-DEPS     = co.h
 
-all: gen worker guard
+CORE = co.c swap.S
+GEN  = main.c   $(CORE)
+POOL = pool.c sched.c $(CORE)
 
-gen: main.c $(LIB) $(DEPS)
-	$(CC) $(CFLAGS) -o $@ main.c $(LIB)
+all: gen pool
 
-worker: worker.c $(LIB) $(DEPS)
-	$(CC) $(CFLAGS) -o $@ worker.c $(LIB)
+gen:  $(GEN) co.h
+	$(CC) $(CFLAGS) -o $@ $(GEN)
 
-guard: guard.c $(LIB) $(DEPS)
-	$(CC) $(CFLAGS) -o $@ guard.c $(LIB)
+pool: $(POOL) co.h sched.h
+	$(CC) $(CFLAGS) -o $@ $(POOL)
 
-run: gen
+run: all
 	./gen
+	./pool
 
 clean:
-	rm -f gen worker guard
+	rm -f gen pool
 
 .PHONY: all run clean

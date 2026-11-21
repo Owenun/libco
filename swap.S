@@ -1,10 +1,8 @@
 /*
- * void co_swap(struct ctx *from, struct ctx *to);
- *   rdi = from, rsi = to
+ * void co_swap(struct ctx *from, struct ctx *to);   rdi = from, rsi = to
  *
- * 全部内容: 存 7 个 callee-saved 寄存器 + rsp, 换过来, 然后 ret。
- * ret 弹出栈顶当 rip —— 所以 rip 根本不用单独存,
- * 只要保证切进去时栈顶放着它该执行的地址。
+ * 存 6 个 callee-saved 寄存器 + rsp, 换过来, 然后 ret。
+ * rip 不用单独存: ret 从栈顶弹目标地址, 所以切进去时栈顶放着谁, 就从谁开始跑。
  */
         .text
         .globl  co_swap
