@@ -2,12 +2,11 @@
 
 x86-64 有栈协程, Linux only, 无外部依赖。
 
-一个协程 = 一条自己的栈 + 56 字节现场。切换就是存 6 个 callee-saved 寄存器加 `rsp`,
+一个协程 = 一条自己的栈 + 56 字节context。切换就是存 6 个 callee-saved 寄存器加 `rsp`,
 再 `ret` 跳到另一条栈上 —— 全部内容在 `swap.S` 的 15 条指令里。
 
-它不提供并行, 也不加速计算; 它把"等"从代码里拿掉: 等待中的协程只占一条栈, 不占线程。
 
-核心 106 行(`co.h` / `co.c` / `swap.S`)。调度不在核心里 —— 轮转和事件循环是两个可选扩展,
+核心 106 行(`co.h` / `co.c` / `swap.S`)。调度 —— 轮转和事件循环是两个可选扩展,
 各自跟用到它的 demo 放在一起。
 
 ## 结构
@@ -22,7 +21,7 @@ x86-64 有栈协程, Linux only, 无外部依赖。
 ## Quick start
 
 ```sh
-make
+make all
 ./test/test1_gen/test1_gen
 ./test/test2_pool/test2_pool
 ./test/test3_fetch/test3_fetch
@@ -55,12 +54,12 @@ make
   单线程协程      61 ms   (完成 100 个)
 ```
 
-数字随机器浮动, 量级是八十倍。它证明的是等待被重叠, 不是计算变快。
+数字随机器浮动, 量级是八十倍。它证明的是等待被重叠。
 
 ## API
 
 ```c
-/* 核心 */
+/* core */
 co_t *co_create(void (*fn)(void *), void *arg);
 int   co_resume(co_t *c, int in);     /* 主栈 -> 协程, 返回 out */
 int   co_yield(int out);              /* 协程 -> 主栈, 返回下次的 in */
@@ -98,7 +97,4 @@ void  loop_run(void);
 - 仅 x86-64 SysV。Win64 下 `rdi` / `rsi` / `xmm6-15` 也是 callee-saved, 需加进 `struct ctx`。
 - 只能在 `co_yield` 这类 call 边界切换。
 - `errno` 是线程局部的, 协程之间共享。
-- 单消费者, `co_yield` 恒回主栈。嵌套(协程里等另一条协程)需在 `struct co` 中记录 caller。
-- 同一条协程不能既产出值又等 fd: `int` 通道在两个扩展里含义不同, 混用要加标记位。
-- `loop.c` 只有 `poll`, 没有超时, 不能"睡 3 秒"。
 - 单线程, 一条协程里做计算会拖住所有其他协程。
