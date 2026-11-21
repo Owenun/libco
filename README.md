@@ -67,23 +67,10 @@ if (n < 0 && errno == EAGAIN) { co_wait_fd(fd); continue; }
 
 `test3_fetch` 的量: 100 个请求, 服务端每个睡 50ms, 串行 5.1s, 单线程 100 个协程 70ms 上下。它证明的是等待被重叠, 不是计算变快。
 
-## join 为什么在机制层之外
-
-`sched_join` 需要把 CPU 交给别人再拿回来, 而机制层里控制流只会回到调用者, 无法表达"等"。就绪队列由外壳持有, 所以等待只能发生在外壳。
-
-## 与 libco 的差异
-
-- 目标由调用者指定; 外壳是 FIFO, 不用随机。
-- 协程数量无上限。libco 用 `MAX_CO=128` 定长表, 调用点都要判 `co_start` 返回值。
-- 切换只经 `co_swap`。libco 有 `setjmp` / `longjmp` 与 `stack_switch_call` 两套, 并在 `co_yield` 里靠 `setjmp` 的返回值区分首次与恢复。
-- 栈是 `mmap` 加 `PROT_NONE` 保护页。libco 内嵌 64KB 数组, 溢出静默写坏堆。
-- 没有 `WAITING` 状态。libco 的死协程必须被 `co_wait` 才释放, 这里可以随时 `co_destroy`。
-
 ## 限制
 
 - 仅 x86-64 SysV。Win64 下 `rdi` / `rsi` / `xmm6-15` 也是 callee-saved, 需加进 `struct ctx`。
 - 只能在 `co_yield` 这类 call 边界切换。
 - `errno` 是线程局部的, 协程之间共享。
-- 单消费者, `co_yield` 恒回主栈。嵌套 (协程里等另一条协程) 需在 `struct co` 中记录 caller。
 - `loop.c` 只有 `poll`, 没有超时: 协程不能"睡 3 秒", 也不能等一条不是 fd 的事件。
 - 单线程, 一条协程里做计算会拖住所有其他协程。
