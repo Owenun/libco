@@ -1,4 +1,4 @@
-/* test2: 3 个 worker 抢 9 个任务; main 只 join 1 号, 余下交给 sched_run。 */
+/* test2: 3 个 worker 抢 9 个任务; main join 全部 */
 #include "sched.h"
 #include <stdio.h>
 
@@ -26,9 +26,9 @@ int main(void)
         w[i] = sched_spawn(worker, &id[i]);
 
     sched_join(w[0]);
-    puts("1 号收工, main 拿回控制权, 2、3 号还停在 yield 上");
+    sched_join(w[1]);
+    sched_join(w[2]);
 
-    sched_run();
     puts("队列空");
     return 0;
 }
